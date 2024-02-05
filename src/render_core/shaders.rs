@@ -1,7 +1,7 @@
 pub mod fs_raymarching {
     vulkano_shaders::shader! {
         ty: "fragment",
-        path: "shaders/raymarching.frag"
+        path: "shaders/raymarching-3d.frag"
     }
 }
 

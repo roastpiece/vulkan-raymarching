@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
+use event::WindowEvent;
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::{swapchain, Validated};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage};
@@ -10,18 +12,20 @@ use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
-use vulkano::pipeline::{GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::{DynamicState, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
 use vulkano::pipeline::graphics::color_blend::{AttachmentBlend, ColorBlendAttachmentState, ColorBlendState};
 use vulkano::pipeline::graphics::multisample::MultisampleState;
-use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
+use vulkano::pipeline::layout::{PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::render_pass::Subpass;
-use vulkano::shader::EntryPoint;
+use vulkano::shader::{EntryPoint, ShaderStages};
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo};
 use winit::event::Event;
 use winit::window::Window;
 use crate::{render_core, window};
 use crate::render_core::vulkano_core::window_size_dependent_setup;
 use vulkano::sync::GpuFuture;
+use winit::event;
+use winit::keyboard::{KeyCode, PhysicalKey};
 
 pub fn run() {
     let (window, event_loop) = window::init();
@@ -41,7 +45,7 @@ pub fn run() {
 
     let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut viewport);
     let mut recreate_swapchain = false;
-    let mut previous_frame_end = Some(Box::new(vulkano::sync::now(device.clone())) as Box<dyn vulkano::sync::GpuFuture>);
+    let mut previous_frame_end = Some(Box::new(vulkano::sync::now(device.clone())) as Box<dyn GpuFuture>);
 
 
     let vertex_shader: EntryPoint = render_core::shaders::vs_raymarching::load(device.clone())
@@ -59,7 +63,14 @@ pub fn run() {
         PipelineShaderStageCreateInfo::new(fragment_shader)
     ];
 
-    let pipeline_layout = PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo::default()).unwrap();
+    let pipeline_layout = PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo {
+        push_constant_ranges: vec![PushConstantRange {
+            stages: ShaderStages::FRAGMENT,
+            offset: 0,
+            size: 8,
+        }],
+        ..PipelineLayoutCreateInfo::default()
+    }).unwrap();
 
     let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
 
@@ -70,10 +81,7 @@ pub fn run() {
             flags: Default::default(),
             stages: stages.into(),
             vertex_input_state: Some(vertex_input_state),
-            viewport_state: Some(ViewportState {
-                viewports: vec![viewport.clone()].into(),
-                ..ViewportState::default()
-            }),
+            viewport_state: Some(ViewportState::default()),
             multisample_state: Some(MultisampleState::default()),
             input_assembly_state: Some(InputAssemblyState::default()),
             rasterization_state: Some(RasterizationState::default()),
@@ -85,7 +93,8 @@ pub fn run() {
                 }
             )),
             subpass: Some(subpass.into()),
-            ..GraphicsPipelineCreateInfo::layout(pipeline_layout)
+            dynamic_state: [DynamicState::Viewport].into_iter().collect(),
+            ..GraphicsPipelineCreateInfo::layout(pipeline_layout.clone())
         }
     ).expect("Failed to create graphics pipeline");
 
@@ -126,13 +135,25 @@ pub fn run() {
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent {
-                event: winit::event::WindowEvent::CloseRequested,
+                event: WindowEvent::CloseRequested,
                 ..
             } => {
                 event_loop_window_target.exit();
             }
             Event::WindowEvent {
-                event: winit::event::WindowEvent::Resized(_),
+                event: WindowEvent::KeyboardInput {
+                    event: event::KeyEvent {
+                        physical_key: PhysicalKey::Code(KeyCode::Escape),
+                        ..
+                    },
+                    ..
+                },
+                ..
+            } => {
+                event_loop_window_target.exit();
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Resized(_),
                 ..
             } => {
                 recreate_swapchain = true;
@@ -141,7 +162,7 @@ pub fn run() {
                 window.request_redraw();
             }
             Event::WindowEvent {
-                event: winit::event::WindowEvent::RedrawRequested,
+                event: WindowEvent::RedrawRequested,
                 ..
             } => {
                 previous_frame_end.as_mut().unwrap().cleanup_finished();
@@ -173,7 +194,7 @@ pub fn run() {
                     recreate_swapchain = true;
                 }
 
-                let clear_values = vec![Some([0.0, 0.0, 1.0, 1.0].into())];
+                let clear_values = vec![Some([0.0, 0.0, 0.0, 1.0].into())];
                 let mut builder = vulkano::command_buffer::AutoCommandBufferBuilder::primary(
                     &command_buffer_allocator,
                     queue.queue_family_index(),
@@ -193,6 +214,7 @@ pub fn run() {
                         }
                     ).unwrap()
                     .set_viewport(0, vec![viewport.clone()].into()).unwrap()
+                    .push_constants(pipeline_layout.clone(), 0, Constants { resolution: [viewport.extent[0], viewport.extent[1]] }).unwrap()
                     .bind_pipeline_graphics(pipeline.clone()).unwrap()
                     .bind_vertex_buffers(0, vec![vertex_buffer.clone()]).unwrap()
                     .bind_index_buffer(index_buffer.clone()).unwrap()
@@ -231,3 +253,8 @@ struct MyVertex {
     position: [f32; 2],
 }
 
+#[repr(C)]
+#[derive(BufferContents)]
+struct Constants {
+    resolution: [f32; 2],
+}
