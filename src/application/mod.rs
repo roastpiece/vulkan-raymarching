@@ -1,8 +1,21 @@
 use std::ops::RangeInclusive;
-use vulkano::pipeline::graphics::viewport::Viewport;
+use std::sync::Arc;
+use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::{swapchain, Validated};
+use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage};
 use vulkano::command_buffer::allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo};
 use vulkano::command_buffer::{CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::rasterization::RasterizationState;
+use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
+use vulkano::pipeline::{GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo};
+use vulkano::pipeline::graphics::color_blend::{AttachmentBlend, ColorBlendAttachmentState, ColorBlendState};
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::layout::PipelineLayoutCreateInfo;
+use vulkano::render_pass::Subpass;
+use vulkano::shader::EntryPoint;
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo};
 use winit::event::Event;
 use winit::window::Window;
@@ -24,9 +37,91 @@ pub fn run() {
     };
 
     let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), StandardCommandBufferAllocatorCreateInfo::default());
+    let buffer_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+
     let mut framebuffers = window_size_dependent_setup(&images, render_pass.clone(), &mut viewport);
     let mut recreate_swapchain = false;
     let mut previous_frame_end = Some(Box::new(vulkano::sync::now(device.clone())) as Box<dyn vulkano::sync::GpuFuture>);
+
+
+    let vertex_shader: EntryPoint = render_core::shaders::vs_raymarching::load(device.clone())
+        .expect("Failed to create vertex shader")
+        .entry_point("main").unwrap();
+    let fragment_shader: EntryPoint = render_core::shaders::fs_raymarching::load(device.clone())
+        .expect("Failed to create frag shader")
+        .entry_point("main").unwrap();
+
+    let vertex_input_state = MyVertex::per_vertex()
+        .definition(&vertex_shader.info().input_interface).unwrap();
+
+    let stages = vec![
+        PipelineShaderStageCreateInfo::new(vertex_shader),
+        PipelineShaderStageCreateInfo::new(fragment_shader)
+    ];
+
+    let pipeline_layout = PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo::default()).unwrap();
+
+    let subpass = Subpass::from(render_pass.clone(), 0).unwrap();
+
+    let pipeline = GraphicsPipeline::new(
+        device.clone(),
+        None,
+        GraphicsPipelineCreateInfo {
+            flags: Default::default(),
+            stages: stages.into(),
+            vertex_input_state: Some(vertex_input_state),
+            viewport_state: Some(ViewportState {
+                viewports: vec![viewport.clone()].into(),
+                ..ViewportState::default()
+            }),
+            multisample_state: Some(MultisampleState::default()),
+            input_assembly_state: Some(InputAssemblyState::default()),
+            rasterization_state: Some(RasterizationState::default()),
+            color_blend_state: Some(ColorBlendState::with_attachment_states(
+                subpass.num_color_attachments(),
+                ColorBlendAttachmentState {
+                    blend: Some(AttachmentBlend::alpha()),
+                    ..ColorBlendAttachmentState::default()
+                }
+            )),
+            subpass: Some(subpass.into()),
+            ..GraphicsPipelineCreateInfo::layout(pipeline_layout)
+        }
+    ).expect("Failed to create graphics pipeline");
+
+    let vertecies = vec![
+        MyVertex { position: [-1.0, -1.0] },
+        MyVertex { position: [-1.0, 1.0] },
+        MyVertex { position: [1.0, -1.0] },
+        MyVertex { position: [1.0, 1.0] }
+    ];
+    let indices = vec![0u32, 1, 2, 1, 2, 3];
+
+    let vertex_buffer = Buffer::from_iter(
+        buffer_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..BufferCreateInfo::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..AllocationCreateInfo::default()
+        },
+        vertecies
+    ).expect("Failed to create vertex buffer");
+
+    let index_buffer = Buffer::from_iter(
+        buffer_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::INDEX_BUFFER,
+            ..BufferCreateInfo::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..AllocationCreateInfo::default()
+        },
+        indices.clone()
+    ).expect("Failed to create index buffer");
 
     event_loop.run(move |event, event_loop_window_target| {
         match event {
@@ -97,6 +192,11 @@ pub fn run() {
                             ..SubpassBeginInfo::default()
                         }
                     ).unwrap()
+                    .set_viewport(0, vec![viewport.clone()].into()).unwrap()
+                    .bind_pipeline_graphics(pipeline.clone()).unwrap()
+                    .bind_vertex_buffers(0, vec![vertex_buffer.clone()]).unwrap()
+                    .bind_index_buffer(index_buffer.clone()).unwrap()
+                    .draw_indexed(indices.len() as u32, 1, 0, 0, 0).unwrap()
                     .end_render_pass(SubpassEndInfo::default()).unwrap();
                 let command_buffer = builder.build().unwrap();
 
@@ -123,3 +223,11 @@ pub fn run() {
         }
     }).expect("Event Loop failed");
 }
+
+#[repr(C)]
+#[derive(BufferContents, Vertex)]
+struct MyVertex {
+    #[format(R32G32_SFLOAT)]
+    position: [f32; 2],
+}
+
