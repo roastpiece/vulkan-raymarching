@@ -1,7 +1,11 @@
 use std::collections::HashSet;
-use std::ops::RangeInclusive;
+use std::env::join_paths;
+use std::f32::consts::PI;
+use std::ops::{Add, RangeInclusive};
 use std::sync::Arc;
+use std::time::Instant;
 use event::WindowEvent;
+use nalgebra::{Matrix, Matrix4, Rotation3, UnitQuaternion, Vector, Vector3};
 use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::{swapchain, Validated};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage};
@@ -19,8 +23,8 @@ use vulkano::pipeline::layout::{PipelineLayoutCreateInfo, PushConstantRange};
 use vulkano::render_pass::Subpass;
 use vulkano::shader::{EntryPoint, ShaderStages};
 use vulkano::swapchain::{SwapchainCreateInfo, SwapchainPresentInfo};
-use winit::event::Event;
-use winit::window::Window;
+use winit::event::{DeviceEvent, ElementState, Event, MouseButton, RawKeyEvent};
+use winit::window::{CursorGrabMode, Window};
 use crate::{render_core, window};
 use crate::render_core::vulkano_core::window_size_dependent_setup;
 use vulkano::sync::GpuFuture;
@@ -63,11 +67,13 @@ pub fn run() {
         PipelineShaderStageCreateInfo::new(fragment_shader)
     ];
 
+
+
     let pipeline_layout = PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo {
         push_constant_ranges: vec![PushConstantRange {
             stages: ShaderStages::FRAGMENT,
             offset: 0,
-            size: 8,
+            size: std::mem::size_of::<Constants>() as u32,
         }],
         ..PipelineLayoutCreateInfo::default()
     }).unwrap();
@@ -98,7 +104,7 @@ pub fn run() {
         }
     ).expect("Failed to create graphics pipeline");
 
-    let vertecies = vec![
+    let vertices = vec![
         MyVertex { position: [-1.0, -1.0] },
         MyVertex { position: [-1.0, 1.0] },
         MyVertex { position: [1.0, -1.0] },
@@ -116,7 +122,7 @@ pub fn run() {
             memory_type_filter: MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..AllocationCreateInfo::default()
         },
-        vertecies
+        vertices
     ).expect("Failed to create vertex buffer");
 
     let index_buffer = Buffer::from_iter(
@@ -132,6 +138,23 @@ pub fn run() {
         indices.clone()
     ).expect("Failed to create index buffer");
 
+
+    let mut delta_time = 0.0;
+    let mut now = Instant::now();
+
+    let mut pressed_keys: HashSet<KeyCode> = HashSet::new();
+    let mut pitch_yaw = [0.0f32, 0.0];
+
+    let mut camera_position = Vector3::new(0.0, 1.6, -5.0);
+    let camera_up = Vector3::new(0.0, 1.0, 0.0);
+    let mut camera_front = Vector3::new(0.0, 0.0, 1.0);
+
+    let mut push_constants = Constants {
+        view_matrix: get_view_matrix(camera_position, camera_front, camera_up).into(),
+        camera_position: [camera_position.x, camera_position.y, camera_position.z, 0.0],
+        resolution: [viewport.extent[0], viewport.extent[1]],
+    };
+
     event_loop.run(move |event, event_loop_window_target| {
         match event {
             Event::WindowEvent {
@@ -140,17 +163,68 @@ pub fn run() {
             } => {
                 event_loop_window_target.exit();
             }
-            Event::WindowEvent {
-                event: WindowEvent::KeyboardInput {
-                    event: event::KeyEvent {
-                        physical_key: PhysicalKey::Code(KeyCode::Escape),
-                        ..
-                    },
-                    ..
-                },
+            Event::DeviceEvent {
+                event: DeviceEvent::Key(RawKeyEvent { physical_key: PhysicalKey::Code(kc), state, .. }),
                 ..
             } => {
-                event_loop_window_target.exit();
+                match (kc, state) {
+                    (KeyCode::Escape, ElementState::Pressed) => {
+                        event_loop_window_target.exit();
+                    }
+                    (KeyCode::KeyF, ElementState::Pressed) => {
+                        if window.fullscreen().is_some() {
+                            window.set_fullscreen(None);
+                        } else {
+                            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                        }
+                    }
+                    (kc, ElementState::Pressed) => {
+                        pressed_keys.insert(kc);
+                    }
+                    (kc, ElementState::Released) => {
+                        pressed_keys.remove(&kc);
+                    }
+                }
+            }
+            Event::WindowEvent {
+                event: WindowEvent::MouseInput { state, button, .. },
+                ..
+            } => {
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    window.set_cursor_grab(CursorGrabMode::Confined)
+                        .or_else(|_e| window.set_cursor_grab(CursorGrabMode::Locked))
+                        .unwrap();
+                    window.set_cursor_visible(false);
+                    window.set_cursor_position(winit::dpi::PhysicalPosition::new(
+                        viewport.extent[0] as f64 / 2.0,
+                        viewport.extent[1] as f64 / 2.0
+                    ))
+                        .unwrap();
+                }
+            }
+            Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion { delta },
+                ..
+            } => {
+                let sensitivity = 0.01 * 3.0;
+                pitch_yaw[0] += delta.1 as f32 * sensitivity;
+                pitch_yaw[1] -= delta.0 as f32 * sensitivity;
+
+                if pitch_yaw[0] > 89.0 {
+                    pitch_yaw[0] = 89.0;
+                } else if pitch_yaw[0] < -89.0 {
+                    pitch_yaw[0] = -89.0;
+                }
+
+                print!("{:?}\r", pitch_yaw);
+
+                let direction = Vector3::new(
+                    pitch_yaw[1].to_radians().cos() * pitch_yaw[0].to_radians().cos(),
+                    pitch_yaw[0].to_radians().sin(),
+                    pitch_yaw[1].to_radians().sin() * pitch_yaw[0].to_radians().cos()
+                );
+                camera_front = direction.normalize();
+                push_constants.view_matrix = get_view_matrix(camera_position, camera_front, camera_up).into();
             }
             Event::WindowEvent {
                 event: WindowEvent::Resized(_),
@@ -159,6 +233,15 @@ pub fn run() {
                 recreate_swapchain = true;
             }
             Event::AboutToWait => {
+                delta_time = {
+                    let new_now = Instant::now();
+                    let delta = new_now - now;
+                    now = new_now;
+                    delta.as_secs_f32()
+                };
+                camera_position = update_camera_position(&pressed_keys, &mut camera_position, camera_front, delta_time);
+                push_constants.view_matrix = get_view_matrix(camera_position, camera_front, camera_up).into();
+                push_constants.camera_position = [camera_position.x, camera_position.y, camera_position.z, 0.0];
                 window.request_redraw();
             }
             Event::WindowEvent {
@@ -169,6 +252,7 @@ pub fn run() {
                 if recreate_swapchain {
                     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
                     let extent: [u32; 2] = window.inner_size().into();
+                    push_constants.resolution = [extent[0] as f32, extent[1] as f32];
 
                     let (new_swapchain, new_images) = match swapchain.recreate(SwapchainCreateInfo {
                         image_extent: extent,
@@ -200,6 +284,7 @@ pub fn run() {
                     queue.queue_family_index(),
                     CommandBufferUsage::OneTimeSubmit
                 ).unwrap();
+
                 builder
                     .begin_render_pass(
                         RenderPassBeginInfo {
@@ -214,7 +299,7 @@ pub fn run() {
                         }
                     ).unwrap()
                     .set_viewport(0, vec![viewport.clone()].into()).unwrap()
-                    .push_constants(pipeline_layout.clone(), 0, Constants { resolution: [viewport.extent[0], viewport.extent[1]] }).unwrap()
+                    .push_constants(pipeline_layout.clone(), 0, push_constants.clone()).unwrap()
                     .bind_pipeline_graphics(pipeline.clone()).unwrap()
                     .bind_vertex_buffers(0, vec![vertex_buffer.clone()]).unwrap()
                     .bind_index_buffer(index_buffer.clone()).unwrap()
@@ -246,6 +331,54 @@ pub fn run() {
     }).expect("Event Loop failed");
 }
 
+fn update_camera_position(pressed_keys: &HashSet<KeyCode>, camera_position: &mut Vector3<f32>, camera_front: Vector3<f32>, mut delta_time: f32) -> Vector3<f32> {
+    delta_time *= 5.0;
+    let mut camera_position = camera_position.clone();
+    for kc in pressed_keys {
+        let movement = camera_front.xz().normalize() * delta_time;
+        match kc {
+            KeyCode::KeyW => {
+                camera_position.x -= movement.x;
+                camera_position.z -= movement.y;
+            }
+            KeyCode::KeyS => {
+                camera_position.x += movement.x;
+                camera_position.z += movement.y;
+            }
+            KeyCode::KeyA => {
+                camera_position.x += movement.y;
+                camera_position.z -= movement.x;
+            }
+            KeyCode::KeyD => {
+                camera_position.x -= movement.y;
+                camera_position.z += movement.x;
+            }
+            KeyCode::Space => {
+                camera_position.y += delta_time;
+            }
+            KeyCode::ShiftLeft => {
+                camera_position.y -= delta_time;
+            }
+            _ => {}
+        }
+    }
+    return camera_position;
+}
+
+fn get_view_matrix(camera_position: Vector3<f32>, camera_front: Vector3<f32>, up: Vector3<f32>) -> Matrix4<f32> {
+    let up = Vector3::new(0.0, 1.0, 0.0);
+    let right = camera_front.cross(&up).normalize();
+    let camera_up = right.cross(&camera_front).normalize();
+    let look_at = Matrix4::new(
+        right.x, camera_up.x, -camera_front.x, 0.0,
+        right.y, camera_up.y, -camera_front.y, 0.0,
+        right.z, camera_up.z, -camera_front.z, 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+    let translate = Matrix4::new_translation(&-camera_position);
+    return (look_at*translate).normalize();
+}
+
 #[repr(C)]
 #[derive(BufferContents, Vertex)]
 struct MyVertex {
@@ -254,7 +387,9 @@ struct MyVertex {
 }
 
 #[repr(C)]
-#[derive(BufferContents)]
+#[derive(BufferContents, Clone)]
 struct Constants {
+    view_matrix: [[f32; 4]; 4],
+    camera_position: [f32; 4],
     resolution: [f32; 2],
 }
