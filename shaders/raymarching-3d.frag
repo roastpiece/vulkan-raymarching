@@ -40,7 +40,7 @@ float f( in vec3 p )
 
 vec3 calcNormal( in vec3 p ) // for function f(p)
 {
-    if (p.y < 0.01) return vec3(0, 1, 0);
+    if (p.y < 0.02) return vec3(0, 1, 0);
 
     const float eps = 0.0001; // or some other value
     const vec2 h = vec2(eps,0);
@@ -68,6 +68,15 @@ float calculateShadow(vec3 point, vec3 light) {
     return result;
 }
 
+float calculateAO(vec3 point, vec3 normal) {
+    float start = 0.01;
+    float step = 0.04;
+    float ao = 0;
+    for (int i = 0; i < 5; i++) {
+        ao += 1/exp2(i) * float(i) * step - f(point + normal * float(i) * (start + step));
+    }
+    return 1 - 5*ao;
+}
 
 bool march(in vec3 ray, vec3 start, out vec3 hit, out int count, out vec3 color) {
     bool result = false;
@@ -123,15 +132,16 @@ void main() {
         vec3 light = normalize(vec3(-1.0, 1.0, -1));
         float diffuse = clamp(dot(normal, light), 0.0, 1.0);
         float specular = pow(clamp(dot(normal, light-ray), 0.0, 1.0), 16);
-        float shadow = clamp(calculateShadow(hit, light), 0.1, 1.0);
+        float shadow = clamp(calculateShadow(hit, light), 0.2, 1.0);
+        float ao = clamp(calculateAO(hit, normal), 0.1, 1.0);
 
         float distance = length(hit - origin);
         float fog = min(1, 5000.0 / (distance * distance));
 
         float ambient_light = 0.5;
         f_color = vec4(
-            0.5 * color * diffuse * fog * shadow
-            + 0.1 * vec3(1.0, 1.0, 1.0) * specular
+            0.7 * color * fog * ao * shadow * diffuse
+            + 0.02 * vec3(1.0, 1.0, 1.0) * specular
             + 0.2 * color * ambient_light
             + vec3(0.5, 0.5, 0.5)*(1-fog), 1.0
         );
