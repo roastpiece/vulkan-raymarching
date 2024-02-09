@@ -332,7 +332,7 @@ pub fn run() {
 }
 
 fn update_camera_position(pressed_keys: &HashSet<KeyCode>, camera_position: &mut Vector3<f32>, camera_front: Vector3<f32>, mut delta_time: f32) -> Vector3<f32> {
-    delta_time *= 5.0;
+    delta_time *= 10.0;
     let mut camera_position = camera_position.clone();
     for kc in pressed_keys {
         let movement = camera_front.xz().normalize() * delta_time;
@@ -375,8 +375,9 @@ fn get_view_matrix(camera_position: Vector3<f32>, camera_front: Vector3<f32>, up
         right.z, camera_up.z, -camera_front.z, 0.0,
         0.0, 0.0, 0.0, 1.0
     );
-    let translate = Matrix4::new_translation(&-camera_position);
-    return (look_at*translate).normalize();
+    return look_at.normalize();
+    // let translate = Matrix4::new_translation(&-camera_position);
+    // return (look_at*translate).normalize();
 }
 
 #[repr(C)]
