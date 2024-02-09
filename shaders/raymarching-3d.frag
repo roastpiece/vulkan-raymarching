@@ -8,7 +8,8 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec4 f_color;
 
-float terrain_max_height = 3;
+float terrain_max_height = 50;
+float terrain_offset = 10;
 
 vec3 hash3( in vec3 p )      // this hash is not production ready, please
 {                        // replace this by something better
@@ -36,13 +37,13 @@ float hash1( vec2 p )
 
 // https://iquilezles.org/articles/gradientnoise/
 // returns 3D value noise (in .x)  and its derivatives (in .yz)
-vec3 noised( in vec2 x )
+float noised( in vec2 x )
 {
     vec2 i = floor( x );
     vec2 f = fract( x );
 
     vec2 u = f*f*f*(f*(f*6.0-15.0)+10.0);
-    vec2 du = 30.0*f*f*(f*(f-2.0)+1.0);
+    //vec2 du = 30.0*f*f*(f*(f-2.0)+1.0);
 
     vec2 ga = hash( i + vec2(0.0,0.0) );
     vec2 gb = hash( i + vec2(1.0,0.0) );
@@ -54,9 +55,9 @@ vec3 noised( in vec2 x )
     float vc = dot( gc, f - vec2(0.0,1.0) );
     float vd = dot( gd, f - vec2(1.0,1.0) );
 
-    return vec3( va + u.x*(vb-va) + u.y*(vc-va) + u.x*u.y*(va-vb-vc+vd),   // value
-                 ga + u.x*(gb-ga) + u.y*(gc-ga) + u.x*u.y*(ga-gb-gc+gd) +  // derivatives
-                 du * (u.yx*(va-vb-vc+vd) + vec2(vb,vc) - va));
+    return va + u.x*(vb-va) + u.y*(vc-va) + u.x*u.y*(va-vb-vc+vd); //,   // value
+//                 ga + u.x*(gb-ga) + u.y*(gc-ga) + u.x*u.y*(ga-gb-gc+gd) +  // derivatives
+//                 du * (u.yx*(va-vb-vc+vd) + vec2(vb,vc) - va));
 }
 
 // https://www.shadertoy.com/view/4ttSWf
@@ -114,9 +115,17 @@ vec4 sdDong(vec3 p) {
 }
 
 vec4 sdFloor(vec3 p) {
-    float d = 1000;
-    d = smin(d, p.y - noise(p.xz*0.1) * terrain_max_height, 0.1);
-    return vec4(d, vec3(0.4, 0.0, 0.9));
+    float noise_val = noised(p.xz*0.01).x;
+    float height_factor = (noise_val+1)/2;
+    float d = p.y - (noise_val * terrain_max_height - terrain_offset);
+    vec3 color;// = min(5.5 * height_factor, 1.0) * vec3(0.9, 0.95, 0.9) + (1 - height_factor) * vec3(0.1, 0.5, 0.15);
+    if (height_factor < 0.5) {
+        color = vec3(0.1, 0.5, 0.15);
+    } else {
+        height_factor = (height_factor - 0.5) * 2;
+        color = vec3(0.9, 0.95, 0.9) * height_factor + vec3(0.1, 0.5, 0.15) * 1 - height_factor;
+    }
+    return vec4(d, color);
 }
 
 vec4 map( in vec3 p )
@@ -183,30 +192,6 @@ float calculateAO(vec3 point, vec3 normal) {
 }
 
 bool march(in vec3 ray, vec3 start, out vec3 hit, out vec3 color) {
-//    // floor plane
-//    float t = (height - start.y) / ray.y;
-//    if (t > height) {
-//        hit = start + ray * t;
-//        count = 1;
-//        color = vec3(0.2, 0.0, 1.0) * clamp(getCheckerboard(hit.xz), 0.5, 1.0);
-//        result = true;
-//    }
-
-    // terrain
-//    float step = 0.01;
-//    for (float terrain_distance = 0; terrain_distance < 1000; terrain_distance += step) {
-//        step = 0.01 + terrain_distance * 0.01;
-//        vec3 p = start + ray * terrain_distance;
-//        float n = noise(p.xz*0.1);
-//        if (p.y < n*10) {
-//            hit = p - ray * terrain_distance * 0.5;
-//            float color_height_factor = clamp((n + 1) / 2, 0.0, 1.0);
-//            color = vec3(0.9, 0.9, 0.9) * color_height_factor + vec3(0.25, 0.7, 0.2) * (1 - color_height_factor);
-//            object_type = 1;
-//            result = true;
-//        }
-//    }
-
     // objects
     float d = 0, dist = 0;
     for (int i = 0; i < 256, dist < 1000; i++) {
@@ -222,12 +207,6 @@ bool march(in vec3 ray, vec3 start, out vec3 hit, out vec3 color) {
     }
     return false;
 }
-
-//mat3 getViewMatrix(vec3 camera_pos, vec3 camera_dir) {
-//    vec3 right = normalize(cross(vec3(0, 1, 0), camera_dir));
-//    vec3 up = normalize(cross(camera_dir, right));
-//    return mat3(right, up, camera_dir);
-//}
 
 void main() {
     float camera_fov = 90;
