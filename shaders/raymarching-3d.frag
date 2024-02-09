@@ -134,13 +134,23 @@ float f( in vec3 p )
     return map(p).x;
 }
 
+//vec3 calcNormal( in vec3 p ) // for function f(p)
+//{
+//    const float eps = 0.00001; // or some other value
+//    const vec2 h = vec2(eps,0);
+//    return normalize( vec3(f(p+h.xyy) - f(p-h.xyy),
+//                           f(p+h.yxy) - f(p-h.yxy),
+//                           f(p+h.yyx) - f(p-h.yyx) ) );
+//}
+
 vec3 calcNormal( in vec3 p ) // for function f(p)
 {
-    const float eps = 0.0001; // or some other value
-    const vec2 h = vec2(eps,0);
-    return normalize( vec3(f(p+h.xyy) - f(p-h.xyy),
-                           f(p+h.yxy) - f(p-h.yxy),
-                           f(p+h.yyx) - f(p-h.yyx) ) );
+    const float h = 0.0001; // replace by an appropriate value
+    const vec2 k = vec2(1,-1);
+    return normalize( k.xyy*f( p + k.xyy*h ) +
+    k.yyx*f( p + k.yyx*h ) +
+    k.yxy*f( p + k.yxy*h ) +
+    k.xxx*f( p + k.xxx*h ) );
 }
 
 float getCheckerboard(vec2 p) {
@@ -199,17 +209,18 @@ bool march(in vec3 ray, vec3 start, out vec3 hit, out vec3 color) {
 
     // objects
     float d = 0, dist = 0;
-    for (int i = 0; i < 50, dist < 1000; i++) {
+    for (int i = 0; i < 256, dist < 1000; i++) {
         vec3 pos = start + ray * dist;
-        dist += d;
         vec4 result = map(pos);
         d = result.x;
-        if (d < 0.0001) {
+        if (d < 0.0001 * dist) {
             hit = pos;
             color = result.yzw;
             return true;
         }
+        dist += d;
     }
+    return false;
 }
 
 //mat3 getViewMatrix(vec3 camera_pos, vec3 camera_dir) {
@@ -233,8 +244,7 @@ void main() {
     bool has_hit = march(ray, origin, hit, color);
 
     if (has_hit) {
-        vec3 normal;
-        normal = calcNormal(hit);
+        vec3 normal = calcNormal(hit);
         vec3 light = normalize(vec3(-1.0, 1.0, -1));
         float diffuse = clamp(dot(normal, light), 0.0, 1.0);
         float specular = pow(clamp(dot(normal, light-ray), 0.0, 1.0), 16);
@@ -246,11 +256,11 @@ void main() {
 
         float ambient_light = 0.5;
         f_color = vec4(
-            0.7 * color * fog * ao * shadow * diffuse * fog
+            0.7 * color * diffuse * shadow * ao
             + 0.04 * vec3(1.0, 1.0, 1.0) * specular
             + 0.2 * color * ambient_light
-            + vec3(0.5, 0.5, 0.5)*(1-fog), 1.0
-        );
+            //+ vec3(0.5, 0.5, 0.5)*(1-fog)
+        , 1.0);
     } else {
         f_color = vec4(0.5, 0.5, 0.5, 1.0);
     }
